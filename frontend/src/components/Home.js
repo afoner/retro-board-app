@@ -4,7 +4,7 @@ import { Plus, Users, Clock, Lock, Download } from 'lucide-react';
 import Modal from './common/Modal';
 import FormInput from './common/FormInput';
 import Button from './common/Button';
-import { extractBoardId } from '../utils/helpers';
+import { extractBoardId, removeCookiesByPrefix } from '../utils/helpers';
 
 const Home = () => {
   const navigate = useNavigate();
@@ -17,7 +17,20 @@ const Home = () => {
     navigate('/create');
   };
 
+  useEffect(() => {
+    // Anasayfaya her dönüşte board_* cookie'lerini temizle
+    removeCookiesByPrefix('board_');
 
+    // Anasayfa yüklendiğinde join error varsa modal'ı göster
+    if (location.state?.joinError) {
+      setShowJoinModal(true);
+      setJoinError(location.state.joinError);
+      if (location.state.boardId) {
+        setJoinData(prev => ({ ...prev, boardId: location.state.boardId }));
+      }
+      window.history.replaceState({}, document.title); // state'i temizle
+    }
+  }, [location.state]);
 
   const handleJoinBoard = (e) => {
     e.preventDefault();
@@ -28,19 +41,6 @@ const Home = () => {
       });
     }
   };
-
-  useEffect(() => {
-    // Anasayfa yüklendiğinde tüm localStorage'ı temizle
-    localStorage.clear();
-    if (location.state?.joinError) {
-      setShowJoinModal(true);
-      setJoinError(location.state.joinError);
-      if (location.state.boardId) {
-        setJoinData(prev => ({ ...prev, boardId: location.state.boardId }));
-      }
-      window.history.replaceState({}, document.title); // state'i temizle
-    }
-  }, [location.state]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">

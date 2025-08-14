@@ -27,7 +27,7 @@ import Modal from './common/Modal';
 import FormInput from './common/FormInput';
 import Button from './common/Button';
 import { API_BASE_URL, MAX_COMMENT_LENGTH } from '../utils/constants';
-import { formatTime, copyToClipboard, getSortOrderLabel } from '../utils/helpers';
+import { formatTime, copyToClipboard, getSortOrderLabel, setCookie, getCookie, removeCookie } from '../utils/helpers';
 
 const Board = () => {
   const { boardId } = useParams();
@@ -58,7 +58,7 @@ const Board = () => {
   const [showTimeWarning, setShowTimeWarning] = useState(false);
   const [warningMessage, setWarningMessage] = useState('');
 
-  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('darkMode') === 'true');
+  const [darkMode, setDarkMode] = useState(() => getCookie('darkMode') === 'true');
   const [showParticipants, setShowParticipants] = useState(false);
   const [joinStatus, setJoinStatus] = useState('pending');
   const [joinError, setJoinError] = useState('');
@@ -76,6 +76,8 @@ const Board = () => {
   // Remove User Modal states
   const [showRemoveUserModal, setShowRemoveUserModal] = useState(false);
   const [userToRemove, setUserToRemove] = useState('');
+  const [connectionStatus, setConnectionStatus] = useState('connecting');
+  const [currentUserId, setCurrentUserId] = useState(null);
 
 
   useEffect(() => {
@@ -83,15 +85,20 @@ const Board = () => {
       return;
     }
     if (!currentNickname || !inviteCode) {
-      const savedUser = localStorage.getItem(`board_${boardId}_user`);
+      const savedUser = getCookie(`board_${boardId}_user`);
+      
       if (savedUser) {
-        const userData = JSON.parse(savedUser);
-        setIsAdmin(userData.isAdmin || false);
-        setCurrentNickname(userData.nickname);
-        setShowJoinModal(false);
-        setJoinStatus('success');
-        initializeSocket(userData.nickname, userData.isAdmin || false, userData.inviteCode || '');
-        return;
+        try {
+          const userData = typeof savedUser === 'string' ? JSON.parse(savedUser) : savedUser;
+          setIsAdmin(userData.isAdmin || false);
+          setCurrentNickname(userData.nickname);
+          setShowJoinModal(false);
+          setJoinStatus('success');
+          initializeSocket(userData.nickname, userData.isAdmin || false, userData.inviteCode || '');
+          return;
+        } catch (error) {
+          removeCookie(`board_${boardId}_user`);
+        }
       }
       const checkBoardAndShowModal = async () => {
         try {
@@ -111,12 +118,12 @@ const Board = () => {
             setJoinStatus('pending');
           } else {
             setShowJoinModal(false);
-            localStorage.removeItem(`board_${boardId}_user`);
+            removeCookie(`board_${boardId}_user`);
             navigate('/', { state: { joinError: 'Board bulunamadı.' } });
           }
         } catch (error) {
           setShowJoinModal(false);
-          localStorage.removeItem(`board_${boardId}_user`);
+          removeCookie(`board_${boardId}_user`);
           navigate('/', { state: { joinError: 'Board bulunamadı.' } });
         }
       };
@@ -129,17 +136,29 @@ const Board = () => {
       setCurrentNickname(location.state.nickname);
       setShowJoinModal(false);
       setJoinStatus('success');
+      // Admin dahil, state ile gelen kullanıcıyı cookie'ye yaz
+      setCookie(`board_${boardId}_user`, {
+        nickname: location.state.nickname,
+        isAdmin: !!location.state.isAdmin,
+        inviteCode: location.state.inviteCode || ''
+      });
       initializeSocket(location.state.nickname, location.state.isAdmin || false, inviteCode || '');
     } else {
       // Check localStorage for existing user session
-      const savedUser = localStorage.getItem(`board_${boardId}_user`);
+      const savedUser = getCookie(`board_${boardId}_user`);
       if (savedUser) {
-        const userData = JSON.parse(savedUser);
-        setIsAdmin(userData.isAdmin || false);
-        setCurrentNickname(userData.nickname);
-        setShowJoinModal(false);
-        setJoinStatus('success');
-        initializeSocket(userData.nickname, userData.isAdmin || false, userData.inviteCode || '');
+        try {
+          const userData = typeof savedUser === 'string' ? JSON.parse(savedUser) : savedUser;
+          setIsAdmin(userData.isAdmin || false);
+          setCurrentNickname(userData.nickname);
+          setShowJoinModal(false);
+          setJoinStatus('success');
+          initializeSocket(userData.nickname, userData.isAdmin || false, userData.inviteCode || '');
+        } catch (error) {
+          removeCookie(`board_${boardId}_user`);
+          // Load board data to check if it exists
+          loadBoardData();
+        }
       } else {
         // Load board data to check if it exists
         loadBoardData();
@@ -148,8 +167,11 @@ const Board = () => {
 
     return () => {
       if (socketRef.current) {
-        try { socketRef.current.removeAllListeners(); } catch (_) {}
-        try { socketRef.current.disconnect(); } catch (_) {}
+        try { 
+          // Sadece event listener'ları kaldır, bağlantıyı kapatma
+          socketRef.current.removeAllListeners(); 
+        } catch (_) {}
+        // Socket'i disconnect etme, sadece referansı temizle
         socketRef.current = null;
       }
     };
@@ -173,13 +195,13 @@ const Board = () => {
       } else {
         // Board bulunamadıysa join modalı açıksa da kapat ve yönlendir
         setShowJoinModal(false);
-        localStorage.removeItem(`board_${boardId}_user`);
+        removeCookie(`board_${boardId}_user`);
         navigate('/', { state: { joinError: 'Board bulunamadı.' } });
         return;
       }
     } catch (error) {
       setShowJoinModal(false);
-      localStorage.removeItem(`board_${boardId}_user`);
+      removeCookie(`board_${boardId}_user`);
       navigate('/', { state: { joinError: 'Board bulunamadı.' } });
       return;
     }
@@ -191,16 +213,81 @@ const Board = () => {
       try { socketRef.current.removeAllListeners(); } catch (_) {}
       try { socketRef.current.disconnect(); } catch (_) {}
     }
-    socketRef.current = io(API_BASE_URL);
+    
+    // Socket.IO bağlantı ayarlarını iyileştir
+    socketRef.current = io(API_BASE_URL, {
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000,
+      forceNew: true,
+      transports: ['websocket', 'polling']
+    });
+
+    // Bağlantı durumu yönetimi
+    socketRef.current.on('connect', () => {
+      setConnectionStatus('connected');
+      setJoinStatus('success');
+    });
+
+    socketRef.current.on('disconnect', (reason) => {
+      setConnectionStatus('disconnected');
+      if (reason === 'io server disconnect') {
+        // Server tarafından kapatıldıysa yeniden bağlan
+        socketRef.current.connect();
+      }
+    });
+
+    socketRef.current.on('connect_error', (error) => {
+      setConnectionStatus('error');
+      setJoinStatus('error');
+      setShowJoinModal(true);
+      setJoinError('Bağlantı hatası. Lütfen tekrar deneyin.');
+    });
+
+    socketRef.current.on('reconnect', (attemptNumber) => {
+      setConnectionStatus('connected');
+      toast.success('Bağlantı yeniden kuruldu!');
+      // Yeniden bağlandıktan sonra board'a join ol
+      if (currentNickname && inviteCode) {
+        socketRef.current.emit('joinBoard', {
+          boardId,
+          nickname: currentNickname,
+          isAdmin: userIsAdmin,
+          inviteCode: userInviteCode
+        });
+      }
+    });
+
+    socketRef.current.on('reconnect_error', (error) => {
+      setConnectionStatus('reconnecting');
+      toast.error('Yeniden bağlanma hatası');
+    });
+
+    socketRef.current.on('reconnect_failed', () => {
+      setConnectionStatus('failed');
+      toast.error('Yeniden bağlanma başarısız. Lütfen sayfayı yenileyin.');
+      setJoinStatus('error');
+      setShowJoinModal(true);
+      setJoinError('Bağlantı kurulamadı. Lütfen sayfayı yenileyin.');
+    });
+
     socketRef.current.on('boardState', (boardState) => {
       setBoard(boardState);
       setIsLocked(boardState.isLocked);
       setShowNames(boardState.showNames);
       setCommentSortOrder(boardState.commentSortOrder || 'chronological');
       setParticipantCount(boardState.participants?.length || 0);
-      
 
-      
+      // Kendi userId'nizi participants listesinden socket.id ile tespit edin
+      try {
+        const me = (boardState.participants || []).find(p => p.socketId === (socketRef.current && socketRef.current.id));
+        if (me && me.id) {
+          setCurrentUserId(me.id);
+        }
+      } catch (_) {}
+
       // Timer senkronizasyonu
       if (boardState.timer && boardState.timer.isActive && boardState.timer.endTime) {
         setIsTimerActive(true);
@@ -306,7 +393,6 @@ const Board = () => {
     });
 
     socketRef.current.on('error', (err) => {
-      console.error('Socket error:', err);
       // Genel hatalar için (nickname değiştirme hataları ayrı event'te)
       setJoinStatus('error');
       setShowJoinModal(true);
@@ -332,7 +418,7 @@ const Board = () => {
     }
 
     socketRef.current.on('boardEnded', () => {
-      localStorage.removeItem(`board_${boardId}_user`);
+      removeCookie(`board_${boardId}_user`);
       toast.info('Board sonlandırıldı. Ana sayfaya yönlendiriliyorsunuz.');
       setTimeout(() => navigate('/'), 2000);
     });
@@ -354,27 +440,38 @@ const Board = () => {
       });
     });
 
-    socketRef.current.on('nicknameChanged', ({ oldNickname, newNickname, userId }) => {
-      // Eğer kendi nickname'i değiştiyse state'i güncelle
-      if (oldNickname === currentNickname) {
+    socketRef.current.on('nicknameChanged', ({ oldNickname, newNickname, userId, socketId }) => {
+      // Sadece kendi userId'niz ise kendi görünen adınızı güncelleyin (cookie dokunmayın)
+      if (currentUserId && userId === currentUserId) {
         setCurrentNickname(newNickname);
-        // localStorage'ı da güncelle
-        const savedUser = localStorage.getItem(`board_${boardId}_user`);
-        if (savedUser) {
-          const userData = JSON.parse(savedUser);
-          userData.nickname = newNickname;
-          localStorage.setItem(`board_${boardId}_user`, JSON.stringify(userData));
-        }
-        // Modal'ı da kapat
         setShowNicknameModal(false);
         setNewNickname('');
         setNicknameError('');
       }
+
       toast.info(`${oldNickname} artık ${newNickname} olarak biliniyor.`);
     });
 
     socketRef.current.on('nicknameChangeSuccess', ({ newNickname }) => {
       setCurrentNickname(newNickname);
+
+      // Cookie'yi tamamen yeniden oluştururken mevcut inviteCode'u koru
+      const saved = getCookie(`board_${boardId}_user`);
+      let persistedInvite = inviteCode;
+      let persistedIsAdmin = isAdmin;
+      try {
+        const parsed = typeof saved === 'string' ? JSON.parse(saved) : saved;
+        if (parsed && parsed.inviteCode) persistedInvite = parsed.inviteCode;
+        if (parsed && typeof parsed.isAdmin === 'boolean') persistedIsAdmin = parsed.isAdmin;
+      } catch (_) {}
+
+      const newUserData = {
+        nickname: newNickname,
+        isAdmin: persistedIsAdmin,
+        inviteCode: persistedInvite
+      };
+      setCookie(`board_${boardId}_user`, newUserData);
+
       setShowNicknameModal(false);
       setNewNickname('');
       setNicknameError('');
@@ -398,7 +495,7 @@ const Board = () => {
 
     socketRef.current.on('kickedFromBoard', ({ message, removedBy }) => {
       toast.error(`${message} (${removedBy} tarafından)`);
-      localStorage.removeItem(`board_${boardId}_user`);
+      removeCookie(`board_${boardId}_user`);
       setTimeout(() => navigate('/', { state: { joinError: message } }), 2000);
     });
   };
@@ -412,7 +509,7 @@ const Board = () => {
       setIsAdmin(false);
       setCurrentNickname(userData.nickname);
       setShowJoinModal(false);
-      localStorage.setItem(`board_${boardId}_user`, JSON.stringify(userData));
+      setCookie(`board_${boardId}_user`, userData);
       initializeSocket(userData.nickname, false, userData.inviteCode);
     }
   };
@@ -518,7 +615,6 @@ const Board = () => {
         throw new Error('Export failed');
       }
     } catch (error) {
-      console.error('Export error:', error);
       toast.error('Dışa aktarma sırasında hata oluştu.');
       throw error; // Re-throw to handle in calling function
     }
@@ -609,7 +705,6 @@ const Board = () => {
       setShowEndBoardModal(false);
       setDownloadDataBeforeEnd(false);
     } catch (error) {
-      console.error('Board sonlandırma hatası:', error);
       toast.error('Board sonlandırılırken bir hata oluştu.');
     } finally {
       setIsEndingBoard(false);
@@ -633,10 +728,10 @@ const Board = () => {
   useEffect(() => {
     if (darkMode) {
       document.documentElement.classList.add('dark');
-      localStorage.setItem('darkMode', 'true');
+      setCookie('darkMode', 'true');
     } else {
       document.documentElement.classList.remove('dark');
-      localStorage.setItem('darkMode', 'false');
+      setCookie('darkMode', 'false');
     }
   }, [darkMode]);
 
@@ -759,6 +854,30 @@ const Board = () => {
             
             {/* Sağ Üst - Katılımcı Sayısı ve Nickname */}
             <div className="flex items-center space-x-4">
+              {/* Connection Status Indicator */}
+              <div className="flex items-center space-x-2">
+                <div className={`w-2 h-2 rounded-full ${
+                  connectionStatus === 'connected' ? 'bg-green-500' :
+                  connectionStatus === 'connecting' ? 'bg-yellow-500' :
+                  connectionStatus === 'reconnecting' ? 'bg-orange-500' :
+                  connectionStatus === 'disconnected' ? 'bg-red-500' :
+                  'bg-gray-500'
+                }`}></div>
+                <span className={`text-xs ${
+                  connectionStatus === 'connected' ? 'text-green-600' :
+                  connectionStatus === 'connecting' ? 'text-yellow-600' :
+                  connectionStatus === 'reconnecting' ? 'text-orange-600' :
+                  connectionStatus === 'disconnected' ? 'text-red-600' :
+                  'text-gray-600'
+                }`}>
+                  {connectionStatus === 'connected' ? 'Bağlı' :
+                   connectionStatus === 'connecting' ? 'Bağlanıyor' :
+                   connectionStatus === 'reconnecting' ? 'Yeniden Bağlanıyor' :
+                   connectionStatus === 'disconnected' ? 'Bağlantı Yok' :
+                   'Hata'}
+                </span>
+              </div>
+              
               {/* Participant Count */}
               <div 
                 className="flex items-center text-gray-600 relative"

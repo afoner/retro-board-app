@@ -9,7 +9,6 @@ const { v4: uuidv4 } = require('uuid');
 const models = require('./models');
 const { Op } = require('sequelize');
 const path = require('path');
-const { setBoardCache, getBoardCache, invalidateBoardCache } = require('./utils/cache');
 const { cleanupOldBoards } = require('./utils/cleanup');
 const { getFullBoardState } = require('./utils/boardState');
 
@@ -20,7 +19,12 @@ const io = socketIo(server, {
   cors: {
     origin: FRONTEND_URL,
     methods: ["GET", "POST"]
-  }
+  },
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  transports: ['websocket', 'polling'],
+  allowEIO3: true,
+  maxHttpBufferSize: 1e8
 });
 
 const PORT = process.env.PORT || 5000;
@@ -53,34 +57,35 @@ io.on('connection', (socket) => {
         socket.emit('error', { message: 'Board not found' });
         return;
       }
-      // Davet kodu kontrolü (admin değilse)
-      if (!isAdmin && board.inviteCode && inviteCode !== board.inviteCode) {
-        socket.emit('error', { message: 'Geçersiz davet kodu' });
-        return;
-      }
-      // Kullanıcıyı bul veya oluştur
+      
+      // Önce bu nickname ile board'da kullanıcı var mı kontrol et
       let user = await models.User.findOne({ where: { boardId, nickname } });
+      
       if (user) {
-        // Eğer eski socketId aktifse (başka bir yerde açık), yeni bağlantıya izin verme
+        // Bu nickname ile kullanıcı varsa, socketId'yi güncelle
         if (io.sockets.sockets.has(user.socketId) && user.socketId !== socket.id) {
+          // Eğer eski socketId aktifse (başka bir yerde açık), yeni bağlantıya izin verme
           socket.emit('error', { message: 'Bu nickname zaten kullanılıyor. Lütfen başka bir isim seçin.' });
           return;
         }
-        // Eski socketId aktif değilse (disconnect olmuşsa), yeni socketId ile güncelle
-        if (user.socketId !== socket.id) {
-          user.socketId = socket.id;
-          await user.save();
-          invalidateBoardCache(boardId);
-        }
+        // SocketId'yi güncelle
+        user.socketId = socket.id;
+        await user.save();
       } else {
+        // Yeni kullanıcı oluşturulmadan önce (admin değilse) davet kodunu doğrula
+        if (!isAdmin && board.inviteCode && inviteCode !== board.inviteCode) {
+          socket.emit('error', { message: 'Geçersiz davet kodu' });
+          return;
+        }
+        // Bu nickname ile kullanıcı yoksa, yeni oluştur
         user = await models.User.create({
           nickname,
           isAdmin: !!isAdmin,
           boardId,
           socketId: socket.id,
         });
-        invalidateBoardCache(boardId);
       }
+      
       // Board state'i yayınla
       const participantCount = await models.User.count({ where: { boardId } });
       io.to(boardId).emit('boardState', await getFullBoardState(boardId));
@@ -124,7 +129,6 @@ io.on('connection', (socket) => {
         dislikes: [],
       });
       // Yorum ekledikten sonra
-      invalidateBoardCache(boardId);
       io.to(boardId).emit('commentAdded', {
         columnId,
         comment: newComment,
@@ -155,7 +159,6 @@ io.on('connection', (socket) => {
         { likes: [...likes], dislikes: [...dislikes] },
         { where: { id: commentId, columnId, boardId } }
       );
-      invalidateBoardCache(boardId);
       io.to(boardId).emit('boardState', await getFullBoardState(boardId));
     } catch (err) {
       console.error('likeComment error:', err);
@@ -182,7 +185,6 @@ io.on('connection', (socket) => {
         { likes: [...likes], dislikes: [...dislikes] },
         { where: { id: commentId, columnId, boardId } }
       );
-      invalidateBoardCache(boardId);
       io.to(boardId).emit('boardState', await getFullBoardState(boardId));
     } catch (err) {
       console.error('dislikeComment error:', err);
@@ -271,14 +273,36 @@ io.on('connection', (socket) => {
         }
       }
 
-      invalidateBoardCache(boardId);
-      
       // Tüm kullanıcılara nickname değişikliğini bildir
       io.to(boardId).emit('nicknameChanged', { 
         oldNickname, 
         newNickname: trimmedNickname,
-        userId: user.id 
+        userId: user.id,
+        socketId: socket.id
       });
+      
+      // Duplicate kullanıcıları kontrol et ve temizle
+      const allUsers = await models.User.findAll({ where: { boardId } });
+      const nicknameCounts = {};
+      allUsers.forEach(u => {
+        nicknameCounts[u.nickname] = (nicknameCounts[u.nickname] || 0) + 1;
+      });
+      
+      // Eğer duplicate varsa, en son oluşturulanı tut
+      for (const nickname in nicknameCounts) {
+        if (nicknameCounts[nickname] > 1) {
+          const duplicateUsers = allUsers.filter(u => u.nickname === nickname);
+          const sortedUsers = duplicateUsers.sort((a, b) => 
+            new Date(b.createdAt) - new Date(a.createdAt)
+          );
+          
+          // İlkini tut, diğerlerini sil
+          for (let i = 1; i < sortedUsers.length; i++) {
+            await sortedUsers[i].destroy();
+          }
+        }
+      }
+      
       io.to(boardId).emit('boardState', await getFullBoardState(boardId));
       
       socket.emit('nicknameChangeSuccess', { newNickname: trimmedNickname });
@@ -297,7 +321,6 @@ io.on('connection', (socket) => {
       if (!board) return;
       board.isLocked = isLocked;
       await board.save();
-      invalidateBoardCache(boardId);
       io.to(boardId).emit('boardLocked', { isLocked });
       io.to(boardId).emit('boardState', await getFullBoardState(boardId));
     } catch (err) {
@@ -315,7 +338,6 @@ io.on('connection', (socket) => {
       if (!board) return;
       board.showNames = showNames;
       await board.save();
-      invalidateBoardCache(boardId);
       io.to(boardId).emit('showNamesToggled', { showNames });
       io.to(boardId).emit('boardState', await getFullBoardState(boardId));
     } catch (err) {
@@ -340,7 +362,6 @@ io.on('connection', (socket) => {
       if (!board) return;
       board.commentSortOrder = sortOrder;
       await board.save();
-      invalidateBoardCache(boardId);
       io.to(boardId).emit('commentSortOrderChanged', { sortOrder });
       io.to(boardId).emit('boardState', await getFullBoardState(boardId));
     } catch (err) {
@@ -360,7 +381,6 @@ io.on('connection', (socket) => {
       board.timer = { endTime, duration, isActive: true };
       board.isLocked = false;
       await board.save();
-      invalidateBoardCache(boardId);
       io.to(boardId).emit('timerStarted', { endTime, duration });
       io.to(boardId).emit('boardLocked', { isLocked: false });
       io.to(boardId).emit('boardState', await getFullBoardState(boardId));
@@ -370,7 +390,6 @@ io.on('connection', (socket) => {
           b.timer.isActive = false;
           b.isLocked = true;
           await b.save();
-          invalidateBoardCache(boardId);
           io.to(boardId).emit('timerEnded');
           io.to(boardId).emit('timerStopped');
           io.to(boardId).emit('boardLocked', { isLocked: true });
@@ -393,7 +412,6 @@ io.on('connection', (socket) => {
       board.timer = { isActive: false, endTime: null, duration: null };
       board.isLocked = true;
       await board.save();
-      invalidateBoardCache(boardId);
       io.to(boardId).emit('timerStopped');
       io.to(boardId).emit('boardLocked', { isLocked: true });
       io.to(boardId).emit('boardState', await getFullBoardState(boardId));
@@ -413,7 +431,6 @@ io.on('connection', (socket) => {
       await models.Column.destroy({ where: { boardId } });
       await models.User.destroy({ where: { boardId } });
       await models.Board.destroy({ where: { id: boardId } });
-      invalidateBoardCache(boardId);
       io.to(boardId).emit('boardEnded');
     } catch (err) {
       console.error('endBoard error:', err);
@@ -431,7 +448,6 @@ io.on('connection', (socket) => {
       // Sadece yorumu ekleyen veya admin silebilir
       if (comment.author !== user.nickname && !user.isAdmin) return;
       await comment.destroy();
-      invalidateBoardCache(boardId);
       io.to(boardId).emit('commentDeleted', { columnId, commentId });
       io.to(boardId).emit('boardState', await getFullBoardState(boardId));
     } catch (err) {
@@ -468,9 +484,6 @@ io.on('connection', (socket) => {
       // Kullanıcıyı sil
       await targetUser.destroy();
 
-      // Cache'i temizle
-      invalidateBoardCache(boardId);
-
       // Katılımcı sayısını güncelle
       const participantCount = await models.User.count({ where: { boardId } });
 
@@ -503,15 +516,23 @@ io.on('connection', (socket) => {
       const user = await models.User.findOne({ where: { socketId: socket.id } });
       if (user) {
         const boardId = user.boardId;
-        await user.destroy();
-        invalidateBoardCache(boardId);
-        const participantCount = await models.User.count({ where: { boardId } });
-        io.to(boardId).emit('userLeft', {
-          nickname: user.nickname,
-          participantCount,
-        });
-        io.to(boardId).emit('participantCountUpdated', { participantCount });
-        io.to(boardId).emit('boardState', await getFullBoardState(boardId));
+        
+        // Kullanıcıyı hemen silme, önce bağlantı durumunu kontrol et
+        // 5 dakika bekle, eğer yeniden bağlanırsa silme
+        setTimeout(async () => {
+          const currentUser = await models.User.findOne({ where: { socketId: socket.id } });
+          if (currentUser && currentUser.socketId === socket.id) {
+            // Hala aynı socketId ile kullanıcı varsa ve yeniden bağlanmamışsa sil
+            await currentUser.destroy();
+            const participantCount = await models.User.count({ where: { boardId } });
+            io.to(boardId).emit('userLeft', {
+              nickname: currentUser.nickname,
+              participantCount,
+            });
+            io.to(boardId).emit('participantCountUpdated', { participantCount });
+            io.to(boardId).emit('boardState', await getFullBoardState(boardId));
+          }
+        }, 300000); // 5 dakika bekle
       }
     } catch (err) {
       console.error('disconnect error:', err);
@@ -605,6 +626,60 @@ app.get('/api/boards/:boardId/export', async (req, res) => {
   }
 });
 
+// Duplicate kullanıcıları temizle (admin only)
+app.post('/api/boards/:boardId/cleanup-duplicates', async (req, res) => {
+  try {
+    const { boardId } = req.params;
+    const { adminNickname } = req.body;
+    
+    // Admin kullanıcıyı bul
+    const adminUser = await models.User.findOne({ 
+      where: { boardId, nickname: adminNickname, isAdmin: true } 
+    });
+    
+    if (!adminUser) {
+      return res.status(403).json({ error: 'Admin yetkisi gerekli' });
+    }
+    
+    // Duplicate nickname'leri bul ve temizle
+    const users = await models.User.findAll({ where: { boardId } });
+    const nicknameCounts = {};
+    const duplicates = [];
+    
+    // Her nickname'in kaç kez kullanıldığını say
+    users.forEach(user => {
+      nicknameCounts[user.nickname] = (nicknameCounts[user.nickname] || 0) + 1;
+      if (nicknameCounts[user.nickname] > 1) {
+        duplicates.push(user);
+      }
+    });
+    
+    // Duplicate'leri temizle (en son oluşturulanı tut, diğerlerini sil)
+    for (const nickname in nicknameCounts) {
+      if (nicknameCounts[nickname] > 1) {
+        const duplicateUsers = users.filter(u => u.nickname === nickname);
+        // En son oluşturulanı tut, diğerlerini sil
+        const sortedUsers = duplicateUsers.sort((a, b) => 
+          new Date(b.createdAt) - new Date(a.createdAt)
+        );
+        
+        // İlkini tut, diğerlerini sil
+        for (let i = 1; i < sortedUsers.length; i++) {
+          await sortedUsers[i].destroy();
+        }
+      }
+    }
+    
+    const cleanedCount = duplicates.length;
+    res.json({ 
+      message: `${cleanedCount} duplicate kullanıcı temizlendi`,
+      cleanedCount 
+    });
+  } catch (err) {
+    console.error('cleanup duplicates error:', err);
+    res.status(500).json({ error: 'Cleanup failed' });
+  }
+});
 
 
 models.sequelize.sync().then(() => {

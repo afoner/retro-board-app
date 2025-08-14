@@ -84,7 +84,6 @@ const CreateBoard = () => {
         toast.error(err.error || 'Board oluşturulurken bir hata oluştu.');
       }
     } catch (error) {
-      console.error('Error:', error);
       toast.error('Board oluşturulurken bir hata oluştu.');
     }
   };

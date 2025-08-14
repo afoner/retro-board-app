@@ -1,11 +1,7 @@
 const models = require('../models');
-const { getBoardCache, setBoardCache } = require('./cache');
 
 async function getFullBoardState(boardId) {
-  // Önce cache'e bak
-  const cached = getBoardCache(boardId);
-  if (cached) return cached;
-  // DB'den çek
+  // Doğrudan DB'den çek
   const board = await models.Board.findByPk(boardId, {
     include: [
       {
@@ -15,7 +11,7 @@ async function getFullBoardState(boardId) {
       },
       {
         model: models.User,
-        attributes: ['nickname', 'isAdmin', 'joinedAt', 'socketId'],
+        attributes: ['id', 'nickname', 'isAdmin', 'joinedAt', 'socketId'],
       },
     ],
     order: [[models.Column, 'order', 'ASC']],
@@ -44,7 +40,6 @@ async function getFullBoardState(boardId) {
     })),
     participants: plain.Users || [],
   };
-  setBoardCache(boardId, result);
   return result;
 }
 
