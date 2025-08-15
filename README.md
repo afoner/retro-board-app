@@ -43,8 +43,7 @@ Gerçek zamanlı, modern ve optimize edilmiş retrospektif board uygulaması. Ta
 ### 🔒 Güvenlik ve Performans
 - **Davet Kodu Doğrulama**: Güvenli katılım sistemi
 - **Board Oluşturma Anahtarı**: İsteğe bağlı güvenlik anahtarı
-- **Memory Cache**: Aktif board'lar için hızlı erişim
-- **Cache Invalidation**: Otomatik cache temizleme
+- **Otomatik Bağlantı Yönetimi**: WebSocket bağlantı kopması durumunda otomatik yeniden bağlanma
 - **Veritabanı Temizleme**: Eski board'ların otomatik temizlenmesi
 
 ### 🔗 Paylaşım ve Erişim
@@ -77,7 +76,6 @@ Gerçek zamanlı, modern ve optimize edilmiş retrospektif board uygulaması. Ta
 - **Docker**: Konteynerizasyon
 - **Docker Compose**: Çoklu servis yönetimi
 - **Railway**: Cloud deployment platformu
-- **Memory Cache**: Performans optimizasyonu
 
 ---
 
@@ -192,6 +190,7 @@ REACT_APP_API_URL=https://your-domain.railway.app
 - `POST /api/boards` - Yeni board oluştur
 - `GET /api/boards/:boardId` - Board bilgilerini getir
 - `GET /api/boards/:boardId/export` - Board'u dışa aktar
+- `POST /api/boards/:boardId/cleanup-duplicates` - Duplicate kullanıcıları temizle (admin)
 
 ### Socket.io Events
 
@@ -216,14 +215,14 @@ REACT_APP_API_URL=https://your-domain.railway.app
 - `commentDeleted` - Yorum silindi
 - `nicknameChanged` - Nickname değişti
 - `boardLocked` - Board kilitlendi/açıldı
-- `showNamesToggled` - İsimleri göster/gizle durumu değişti (admin işlemi)
-- `commentSortOrderChanged` - Yorum sıralaması değişti (admin işlemi)
+- `showNamesToggled` - İsimleri göster/gizle durumu değişti
+- `commentSortOrderChanged` - Yorum sıralaması değişti
 - `timerStarted` - Zamanlayıcı başladı (kilit otomatik açılır)
 - `timerEnded` - Zamanlayıcı bitti (kilit otomatik kapanır)
 - `timerStopped` - Zamanlayıcı durduruldu (kilit otomatik kapanır)
 - `participantCountUpdated` - Katılımcı sayısı güncellendi
 - `boardEnded` - Board sonlandırıldı
-- `kickedFromBoard` - Kullanıcı board'dan atıldı (yalnızca hedef kullanıcıya gönderilir)
+- `kickedFromBoard` - Kullanıcı board'dan atıldı
 - `userLeft` - Kullanıcı ayrıldı
 - `userRemoved` - Kullanıcı atıldı
 - `error` - Hata mesajı
@@ -259,10 +258,10 @@ docker run -p 5000:5000 -e DATABASE_URL=your_db_url retro-board
 
 ## 🔍 Geliştirici Notları
 
-### Cache Sistemi
-- Board state cache süresi: 20 dakika
-- Otomatik cache invalidation
-- Memory-based cache sistemi
+### Veri Yönetimi
+- Doğrudan veritabanından veri çekimi (cache yok)
+- Gerçek zamanlı veri senkronizasyonu
+- Otomatik duplicate kullanıcı temizleme
 
 ### Güvenlik
 - Davet kodu doğrulama
@@ -271,9 +270,9 @@ docker run -p 5000:5000 -e DATABASE_URL=your_db_url retro-board
 - CORS yapılandırması
 
 ### Performans
-- Optimize edilmiş sorgular (yük azaltma ve alan daraltma)
-- Memory cache (20 dk TTL, otomatik invalidation)
-- Sequelize varsayılan connection pool kullanımı
+- Optimize edilmiş veritabanı sorguları
+- WebSocket bağlantı yönetimi
+- Otomatik bağlantı yeniden kurma
 
 ### Kullanıcı Deneyimi
 - Gerçek zamanlı güncellemeler
