@@ -496,12 +496,19 @@ io.on('connection', (socket) => {
       io.to(boardId).emit('participantCountUpdated', { participantCount });
       io.to(boardId).emit('boardState', await getFullBoardState(boardId));
 
-      // Eğer atılan kullanıcı hala bağlıysa, ona özel mesaj gönder
+      // Eğer atılan kullanıcı hala bağlıysa, ona özel mesaj gönder ve socket'ı kapat
       if (targetUser.socketId && io.sockets.sockets.has(targetUser.socketId)) {
-        io.to(targetUser.socketId).emit('kickedFromBoard', { 
-          message: 'Board\'dan atıldınız',
-          removedBy: adminUser.nickname 
-        });
+        const targetSocket = io.sockets.sockets.get(targetUser.socketId);
+        if (targetSocket) {
+          // Önce mesajı gönder
+          targetSocket.emit('kickedFromBoard', { 
+            message: 'Board\'dan atıldınız',
+            removedBy: adminUser.nickname 
+          });
+          
+          // Sonra socket bağlantısını zorla kapat
+          targetSocket.disconnect(true);
+        }
       }
 
     } catch (err) {

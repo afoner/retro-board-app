@@ -496,6 +496,16 @@ const Board = () => {
     socketRef.current.on('kickedFromBoard', ({ message, removedBy }) => {
       toast.error(`${message} (${removedBy} tarafından)`);
       removeCookie(`board_${boardId}_user`);
+      
+      // Socket bağlantısını temizle
+      if (socketRef.current) {
+        try {
+          socketRef.current.removeAllListeners();
+          socketRef.current.disconnect();
+        } catch (_) {}
+        socketRef.current = null;
+      }
+      
       setTimeout(() => navigate('/', { state: { joinError: message } }), 2000);
     });
   };
