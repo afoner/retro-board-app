@@ -19,7 +19,8 @@ import {
   Sun,
   Moon,
   Edit3,
-  X
+  X,
+  Smile
 } from 'lucide-react';
 import { toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
@@ -44,6 +45,18 @@ const Board = () => {
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [newComment, setNewComment] = useState('');
   const [selectedColumn, setSelectedColumn] = useState('');
+  // Emoji picker state
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const emojiOptions = [
+    // Smileys & Emotion
+    '😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','😗','😚','😙','😋','😛','😜','🤪','😝','🫠','🤗','🤭','🤫','🤔','🫡','🤐','🤨','😐','😑','😶','🫥','😶‍🌫️','🙄','😏','😣','😥','😮','🤥','😪','😴','😌','😛','😔','😕','🙁','☹️','😟','😢','😭','😮‍💨','😤','😠','😡','🤬','🤯','😳','🥵','🥶','😱','😨','😰','😥','😓','🤗','🤝','🙏','💪','👍','👎','👌','✌️','🤞','🤟','🤘','👏','🙌','🫶','💯','✨','🔥','🎉','🎊','✅','❌','❗','❓',
+    // People & Gestures
+    '👋','🤚','🖐️','✋','🖖','👊','🤛','🤜','🫳','🫴','👏','🫵','🤲','👐','✍️','💅','🤳','💃','🕺','🧘','🏃','🚶',
+    // Objects & Symbols
+    '💡','📌','📎','📝','📣','📧','📦','🗂️','🗓️','⏰','🧭','💬','🗨️','💭','🔒','🔓','🔑','🧩','🛠️','⚙️',
+    // Food & Misc
+    '☕','🍵','🍪','🍰','🍕','🍔','🌮','🍎','🍌','🥑'
+  ];
   const [timerDuration, setTimerDuration] = useState(5);
     const [timeLeft, setTimeLeft] = useState(null);
    const [isTimerActive, setIsTimerActive] = useState(false);
@@ -770,6 +783,39 @@ const Board = () => {
     return [...board.columns].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   };
 
+  // Insert emoji at cursor position while respecting MAX_COMMENT_LENGTH
+  const insertEmojiAtCursor = (emoji) => {
+    const textarea = commentInputRef.current;
+    const selectionStart = textarea?.selectionStart ?? newComment.length;
+    const selectionEnd = textarea?.selectionEnd ?? newComment.length;
+
+    const currentLength = newComment.length;
+    const selectedLength = selectionEnd - selectionStart;
+    const availableSpace = MAX_COMMENT_LENGTH - (currentLength - selectedLength);
+
+    if (availableSpace <= 0) return;
+
+    const emojiToInsert = emoji.slice(0, availableSpace);
+
+    const before = newComment.slice(0, selectionStart);
+    const after = newComment.slice(selectionEnd);
+    const nextValue = `${before}${emojiToInsert}${after}`;
+
+    setNewComment(nextValue);
+    setShowEmojiPicker(false);
+
+    // Restore cursor after state update
+    const nextCursor = selectionStart + emojiToInsert.length;
+    setTimeout(() => {
+      if (commentInputRef.current) {
+        commentInputRef.current.focus();
+        try {
+          commentInputRef.current.setSelectionRange(nextCursor, nextCursor);
+        } catch {}
+      }
+    }, 0);
+  };
+
   if (showJoinModal) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
@@ -1172,20 +1218,49 @@ const Board = () => {
                 <div className="border-t pt-4">
                   {selectedColumn === column.id ? (
                     <div className="space-y-2">
-                      <textarea
-                        ref={commentInputRef}
-                        value={newComment}
-                        onChange={(e) => setNewComment(e.target.value.slice(0, MAX_COMMENT_LENGTH))}
-                        maxLength={MAX_COMMENT_LENGTH}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                        rows="3"
-                        placeholder="Yorumunuzu yazın..."
-                        onKeyPress={(e) => {
-                          if (e.key === 'Enter' && e.ctrlKey) {
-                            handleAddComment(column.id);
-                          }
-                        }}
-                      />
+                      <div className="relative">
+                        <textarea
+                          ref={commentInputRef}
+                          value={newComment}
+                          onChange={(e) => setNewComment(e.target.value.slice(0, MAX_COMMENT_LENGTH))}
+                          maxLength={MAX_COMMENT_LENGTH}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                          rows="3"
+                          placeholder="Yorumunuzu yazın..."
+                          onKeyPress={(e) => {
+                            if (e.key === 'Enter' && e.ctrlKey) {
+                              handleAddComment(column.id);
+                            }
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowEmojiPicker((v) => !v);
+                            setTimeout(() => commentInputRef.current?.focus(), 0);
+                          }}
+                          className="absolute bottom-2 right-2 p-1.5 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-700"
+                          title="Emoji ekle"
+                        >
+                          <Smile className="w-4 h-4" />
+                        </button>
+
+                        {showEmojiPicker && (
+                          <div className="absolute z-10 bottom-10 right-0 w-72 max-h-56 overflow-auto bg-white border border-gray-200 rounded-md shadow-lg p-2 grid grid-cols-8 gap-1">
+                            {emojiOptions.map((emj) => (
+                              <button
+                                key={emj}
+                                type="button"
+                                className="text-lg hover:bg-gray-100 rounded"
+                                onClick={() => insertEmojiAtCursor(emj)}
+                                title={emj}
+                              >
+                                {emj}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                       <div className="text-xs text-gray-500 text-right">{MAX_COMMENT_LENGTH - newComment.length} karakter kaldı</div>
                       <div className="flex space-x-2">
                         <button
@@ -1198,6 +1273,7 @@ const Board = () => {
                           onClick={() => {
                             setSelectedColumn('');
                             setNewComment('');
+                            setShowEmojiPicker(false);
                           }}
                           className="flex-1 bg-gray-300 hover:bg-gray-400 text-gray-700 text-sm py-2 px-3 rounded-md transition duration-200"
                         >
@@ -1209,11 +1285,11 @@ const Board = () => {
                     <button
                       onClick={() => {
                         setSelectedColumn(column.id);
-                        setTimeout(() => commentInputRef.current?.focus(), 100);
+                        setTimeout(() => commentInputRef.current?.focus(), 0);
                       }}
-                      className="w-full text-center py-2 px-3 border-2 border-dashed border-gray-300 rounded-md text-gray-500 hover:border-gray-400 hover:text-gray-600 transition duration-200"
+                      className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm py-2 px-3 rounded-md transition duration-200"
                     >
-                      + Yorum Ekle
+                      Yorum Ekle
                     </button>
                   )}
                 </div>
