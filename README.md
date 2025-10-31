@@ -75,7 +75,6 @@ Gerçek zamanlı, modern ve optimize edilmiş retrospektif board uygulaması. Ta
 ### DevOps & Deployment
 - **Docker**: Konteynerizasyon
 - **Docker Compose**: Çoklu servis yönetimi
-- **Railway**: Cloud deployment platformu
 
 ---
 
@@ -125,10 +124,11 @@ docker-compose up -d --build
 
 ### Backend (.env)
 ```env
-DATABASE_URL=postgres://user:password@host:port/database
+DATABASE_URL=postgres://retro_user:retro_pass@db:5432/retro_board
 PORT=5000
+NODE_ENV=production
+FRONTEND_URL=http://localhost:5000
 BOARD_CREATE_KEY=your_secret_key_here
-FRONTEND_URL=http://localhost:3000
 ```
 
 ### Frontend (.env)
@@ -136,13 +136,20 @@ FRONTEND_URL=http://localhost:3000
 REACT_APP_API_URL=http://localhost:5000
 ```
 
-### Production Örneği (Railway)
+### Production Örneği
+
+**Backend (.env):**
 ```env
-DATABASE_URL=postgres://user:password@host:port/database
+DATABASE_URL=postgres://prod_user:secure_password@your-db-host:5432/retro_board
 PORT=5000
-BOARD_CREATE_KEY=your_production_key
-FRONTEND_URL=https://your-domain.railway.app
-REACT_APP_API_URL=https://your-domain.railway.app
+NODE_ENV=production
+FRONTEND_URL=https://your-production-domain.com
+BOARD_CREATE_KEY=your_secure_production_key
+```
+
+**Frontend (.env):**
+```env
+REACT_APP_API_URL=https://your-production-domain.com
 ```
 
 ---
@@ -231,28 +238,169 @@ REACT_APP_API_URL=https://your-domain.railway.app
 
 ## 🚀 Deployment
 
-### Railway (Önerilen)
-1. Railway hesabı oluştur
-2. GitHub repo'yu bağla
-3. PostgreSQL servisi ekle
-4. Environment variables'ları ayarla
-5. Deploy et
+### Docker Compose ile (Önerilen)
 
-### Docker ile
+```bash
+# 1. Projeyi klonla
+git clone https://github.com/your-username/retro-board-app.git
+cd retro-board-app
+
+# 2. .env dosyalarını oluştur
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env
+
+# 3. .env dosyalarını düzenle (production değerleriyle)
+nano backend/.env
+nano frontend/.env
+
+# 4. Docker Compose ile başlat
+docker-compose up -d --build
+
+# 5. Logları kontrol et
+docker-compose logs -f
+```
+
+### Standalone Docker ile
+
 ```bash
 # Production build
 docker build -t retro-board .
 
 # Çalıştır
-docker run -p 5000:5000 -e DATABASE_URL=your_db_url retro-board
+docker run -p 5000:5000 \
+  -e DATABASE_URL=your_db_url \
+  -e BOARD_CREATE_KEY=your_secret_key \
+  retro-board
 ```
 
 ### Manuel Deployment
-1. Backend'i sunucuya yükle
-2. PostgreSQL kur ve yapılandır
-3. Environment variables'ları ayarla
-4. Frontend'i build et ve serve et
-5. Reverse proxy yapılandır (nginx)
+
+1. **Backend Kurulumu:**
+   ```bash
+   cd backend
+   npm install --production
+   cp .env.example .env
+   # .env dosyasını düzenle
+   npm start
+   ```
+
+2. **Frontend Build:**
+   ```bash
+   cd frontend
+   npm install
+   cp .env.example .env
+   # .env dosyasını düzenle
+   npm run build
+   # build/ klasörünü backend/public/ klasörüne kopyala
+   ```
+
+3. **PostgreSQL Kurulumu:**
+   - PostgreSQL 12+ yükle
+   - Database ve kullanıcı oluştur
+   - `DATABASE_URL` environment variable'ını ayarla
+
+4. **Reverse Proxy (Nginx - Opsiyonel):**
+   ```nginx
+   server {
+       listen 80;
+       server_name your-domain.com;
+       
+       location / {
+           proxy_pass http://localhost:5000;
+           proxy_http_version 1.1;
+           proxy_set_header Upgrade $http_upgrade;
+           proxy_set_header Connection 'upgrade';
+           proxy_set_header Host $host;
+           proxy_cache_bypass $http_upgrade;
+       }
+   }
+   ```
+
+### Cloud Deployment (AWS, Azure, GCP, DigitalOcean)
+
+1. **VPS/VM Oluştur**
+2. **Docker ve Docker Compose yükle**
+3. **Yukarıdaki Docker Compose adımlarını takip et**
+4. **Domain ve SSL sertifikası yapılandır** (Let's Encrypt önerilir)
+
+---
+
+## 🔐 Production'da .env Dosyaları Yönetimi
+
+### ⚠️ Önemli: .env Dosyaları GitHub'a Pushlanamazdır!
+
+Güvenlik nedeniyle `.env` dosyaları `.gitignore`'da olmalıdır. Production deployment için:
+
+### Yöntem 1: CI/CD Secrets (GitHub Actions)
+
+1. **GitHub Secrets Tanımlama:**
+   ```
+   Repository → Settings → Secrets and variables → Actions → New secret
+   ```
+
+2. **Deployment Workflow:**
+   ```yaml
+   # .github/workflows/deploy.yml
+   - name: Create .env files
+     run: |
+       echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" >> backend/.env
+       echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> backend/.env
+       echo "REACT_APP_API_URL=${{ secrets.REACT_APP_API_URL }}" >> frontend/.env
+   ```
+
+### Yöntem 2: Production Sunucuda Manuel Oluşturma
+
+```bash
+# Production sunucuya SSH bağlantısı
+ssh user@production-server
+
+# Proje dizinine git
+cd /app/retro-board-app
+
+# Backend .env oluştur
+cp backend/.env.example backend/.env
+nano backend/.env  # Gerçek değerleri gir
+
+# Frontend .env oluştur
+cp frontend/.env.example frontend/.env
+nano frontend/.env  # Gerçek değerleri gir
+
+# Docker Compose ile başlat
+docker-compose up -d
+```
+
+### Yöntem 3: Docker Compose Environment Variables
+
+```yaml
+# docker-compose.prod.yml
+services:
+  retro-board-app:
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      PORT: 5000
+```
+
+```bash
+# .env dosyasını docker-compose ile kullan
+export DATABASE_URL="postgresql://..."
+export JWT_SECRET="your-secret"
+docker-compose -f docker-compose.prod.yml up -d
+```
+
+### .env.example Dosyaları
+
+Projeye `.env.example` dosyaları eklenmiştir. Deployment sırasında:
+
+```bash
+# Backend
+cp backend/.env.example backend/.env
+# Ardından gerçek değerleri düzenleyin
+
+# Frontend
+cp frontend/.env.example frontend/.env
+# Ardından gerçek değerleri düzenleyin
+```
 
 ---
 
